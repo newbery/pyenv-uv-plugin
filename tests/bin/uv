@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+
+#
+# TODO: This 'uv' stub feels too verbose.
+# Think some more about a simpler approach.
+#
+
+set -euo pipefail
+
+cmd="${1:-}"
+sub="${2:-}"
+
+if [[ "$cmd" != "python" ]]; then
+  echo "uv-stub: unsupported top-level command: $*" >&2
+  exit 2
+fi
+
+case "$sub" in
+  dir)
+    echo "${TEST_UV_PYTHON_DIR:?TEST_UV_PYTHON_DIR not set}"
+    exit 0
+    ;;
+
+  install)
+    # Accept: uv python install [--default] <request>
+    # Uses TEST_UV_INSTALL_MAP:
+    #   "REQ=DIRNAME:VERSION[:REQ2=DIRNAME2:VERSION2...]"
+    # Creates:
+    #   $TEST_UV_PYTHON_DIR/DIRNAME/bin/python3  (prints VERSION for -c)
+    req=""
+    for a in "${@:3}"; do
+      [[ "$a" == --* ]] && continue
+      req="$a"
+    done
+    [[ -n "$req" ]] || { echo "uv-stub: missing request" >&2; exit 2; }
+
+    map="${TEST_UV_INSTALL_MAP:-}"
+    [[ -n "$map" ]] || { echo "uv-stub: TEST_UV_INSTALL_MAP not set" >&2; exit 2; }
+
+    entry=""
+    IFS=':' read -r -a parts <<<"$map"
+    for p in "${parts[@]}"; do
+      if [[ "$p" == "$req="* ]]; then
+        entry="${p#${req}=}"
+        break
+      fi
+    done
+    [[ -n "$entry" ]] || { echo "uv-stub: no mapping for request '$req' in TEST_UV_INSTALL_MAP" >&2; exit 2; }
+
+    # entry is DIRNAME:VERSION (but we split map by :, so allow embedded :)
+    # We support mapping like: 3.12=cpython-3.12.7-any:3.12.7
+    # i.e. after '=' we expect "DIRNAME:VERSION"
+    dirname="${entry%%:*}"
+    version="${entry#*:}"
+    [[ -n "$dirname" && -n "$version" ]] || { echo "uv-stub: bad mapping entry for '$req'" >&2; exit 2; }
+
+    prefix="${TEST_UV_PYTHON_DIR:?}/$dirname"
+    mkdir -p "$prefix/bin"
+
+    cat >"$prefix/bin/python3" <<EOF
+#!/bin/sh
+if [ "\$1" = "-c" ]; then
+  echo "$version"
+  exit 0
+fi
+echo "fake-python: unsupported args: \$*" >&2
+exit 2
+EOF
+    chmod +x "$prefix/bin/python3"
+    exit 0
+    ;;
+
+  find)
+    # Accept: uv python find ... <request>
+    # Return the python3 path inside the installed prefix according to TEST_UV_INSTALL_MAP
+    req="${*: -1}"
+    map="${TEST_UV_INSTALL_MAP:-}"
+    [[ -n "$map" ]] || { echo "uv-stub: TEST_UV_INSTALL_MAP not set" >&2; exit 2; }
+
+    entry=""
+    IFS=':' read -r -a parts <<<"$map"
+    for p in "${parts[@]}"; do
+      if [[ "$p" == "$req="* ]]; then
+        entry="${p#${req}=}"
+        break
+      fi
+    done
+    [[ -n "$entry" ]] || { exit 1; }
+
+    dirname="${entry%%:*}"
+    prefix="${TEST_UV_PYTHON_DIR:?}/$dirname"
+    echo "$prefix/bin/python3"
+    exit 0
+    ;;
+
+  *)
+    echo "uv-stub: unsupported python subcommand: $sub" >&2
+    exit 2
+    ;;
+esac

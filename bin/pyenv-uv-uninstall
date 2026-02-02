@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+#
+# Usage:
+#   pyenv uv-uninstall [--only-this | --all-links] <pyenv-version-name>
+#
+# Removal modes:
+# - default: remove <name> plus other plugin alias-looking symlinks pointing to same prefix:
+#     - patch alias (X.Y.Z)
+#     - ${PYENV_UV_PREFIX:-uv-}* entries
+# - --only-this: remove only <name>
+# - --all-links: remove every symlink in versions/ pointing to same prefix (including custom names)
+#
+
+set -euo pipefail
+
+[ -n "${PYENV_DEBUG:-}" ] && set -x
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "pyenv-uv: this command must be run with bash (not sh)." >&2
+  exit 127
+fi
+
+mode="default"   # default | only-this | all-links
+
+no_aliases=0
+case "${PYENV_UV_ALIASES:-1}" in
+  0|false|FALSE|no|NO) no_aliases=1 ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --only-this) mode="only-this"; shift ;;
+    --all-links) mode="all-links"; shift ;;
+    --no-refresh-aliases) no_aliases=1; shift ;;
+    --help|-h)
+      echo "Usage: pyenv uv-uninstall [--only-this | --all-links] <pyenv-version-name>" >&2
+      exit 0
+      ;;
+    --) shift; break ;;
+    -*) echo "pyenv-uv: unknown option: $1" >&2; exit 1 ;;
+    *) break ;;
+  esac
+done
+
+name="${1:-}"
+if [[ -z "$name" ]]; then
+  pyenv-help --usage uv-uninstall >&2 || true
+  echo "Usage: pyenv uv-uninstall [--only-this | --all-links] <pyenv-version-name>" >&2
+  exit 1
+fi
+
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../libexec/pyenv-uv-common.bash
+source "${PLUGIN_ROOT}/libexec/pyenv-uv-common.bash"
+
+pyenv_uv_require pyenv-root pyenv-rehash
+
+UV_PREFIX="${PYENV_UV_PREFIX:-uv-}"
+VERSIONS_DIR="$(pyenv_uv_versions_dir)"
+target="${VERSIONS_DIR}/${name}"
+
+if [[ ! -e "$target" && ! -L "$target" ]]; then
+  echo "pyenv-uv: no such pyenv version: $name" >&2
+  exit 2
+fi
+
+prefix=""
+if [[ -L "$target" ]]; then
+  prefix="$(readlink "$target")"
+else
+  prefix="$target"
+fi
+
+rm -rf "$target"
+echo "pyenv-uv: removed pyenv version '$name'"
+
+if [[ -n "$prefix" && "$mode" != "only-this" ]]; then
+  is_plugin_name() {
+    local bn="$1"
+    # main registrations from this plugin
+    if [[ "$bn" == "${UV_PREFIX}"* ]]; then
+      return 0
+    fi
+    # patch alias name (x.y.z)
+    if [[ "$bn" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      return 0
+    fi
+    return 1
+  }
+
+  removed=0
+  for p in "${VERSIONS_DIR}"/*; do
+    [[ -e "$p" || -L "$p" ]] || continue
+    [[ -L "$p" ]] || continue
+
+    bn="$(basename "$p")"
+    [[ "$bn" == "$name" ]] && continue
+
+    if [[ "$mode" == "default" ]]; then
+      is_plugin_name "$bn" || continue
+    fi
+
+    link_target="$(readlink "$p")"
+    if [[ "$link_target" == "$prefix" ]]; then
+      rm -rf "$p"
+      removed=$((removed+1))
+      echo "pyenv-uv: removed link '$bn' (same prefix)"
+    fi
+  done
+
+  [[ $removed -gt 0 ]] && echo "pyenv-uv: removed $removed additional link(s)"
+fi
+
+
+if [[ $no_aliases -eq 1 ]]; then
+  pyenv-rehash
+else
+  pyenv_uv_refresh_aliases
+fi
+
+echo "pyenv-uv: done (uv install left intact)"

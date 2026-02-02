@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#
+# Usage:
+#   pyenv uv-alias <alias> <target>
+#   pyenv uv-alias --unset <alias>
+#   pyenv uv-alias --show <alias>
+#
+# target can be:
+# - a pyenv version name, e.g. uv-cpython-3.13.11-macos-aarch64-none
+# - an absolute path to a prefix dir
+#
+# Behavior:
+# - Writes an override to $(pyenv root)/pyenv-uv/alias-overrides.tsv
+# - Creates/updates the alias symlink versions/<alias> -> <resolved prefix dir>
+# - Respects the protection rule: if alias exists and points to non-uv, refuse unless --force
+#
+
+set -euo pipefail
+
+[ -n "${PYENV_DEBUG:-}" ] && set -x
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "pyenv-uv: this command must be run with bash (not sh)." >&2
+  exit 127
+fi
+
+force=0
+cmd="set"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force) force=1; shift ;;
+    --unset) cmd="unset"; shift ;;
+    --show)  cmd="show"; shift ;;
+    --help|-h)
+      echo "Usage:" >&2
+      echo "  pyenv uv-alias <alias> <target>" >&2
+      echo "  pyenv uv-alias --unset <alias>" >&2
+      echo "  pyenv uv-alias --show <alias>" >&2
+      echo "Options: --force" >&2
+      exit 0
+      ;;
+    --) shift; break ;;
+    -*) echo "pyenv-uv: unknown option: $1" >&2; exit 1 ;;
+    *) break ;;
+  esac
+done
+
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../libexec/pyenv-uv-common.bash
+source "${PLUGIN_ROOT}/libexec/pyenv-uv-common.bash"
+
+pyenv_uv_require pyenv-root pyenv-rehash
+
+alias_name="${1:-}"
+
+if [[ "$cmd" == "show" ]]; then
+  [[ -n "$alias_name" ]] || { echo "Usage: pyenv uv-alias --show <alias>" >&2; exit 1; }
+  v="$(pyenv_uv_override_get "$alias_name")"
+  if [[ -n "$v" ]]; then
+    echo "$alias_name   $v"
+  else
+    echo "pyenv-uv: no override set for '$alias_name'" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+if [[ "$cmd" == "unset" ]]; then
+  [[ -n "$alias_name" ]] || { echo "Usage: pyenv uv-alias --unset <alias>" >&2; exit 1; }
+  pyenv_uv_override_unset "$alias_name"
+  echo "pyenv-uv: cleared override for '$alias_name'"
+  exit 0
+fi
+
+target="${2:-}"
+if [[ -z "$alias_name" || -z "$target" ]]; then
+  echo "Usage: pyenv uv-alias <alias> <target>" >&2
+  exit 1
+fi
+
+# Protection rule: if alias exists and points non-uv, refuse unless --force.
+if pyenv_uv_alias_is_protected_non_uv "$alias_name"; then
+  if [[ $force -ne 1 ]]; then
+    echo "pyenv-uv: alias '$alias_name' exists and points to a non-uv python; refusing to override." >&2
+    echo "         Use --force if you really want to replace it." >&2
+    exit 2
+  fi
+fi
+
+prefix_dir="$(pyenv_uv_resolve_target_to_prefix "$target")"
+if [[ -z "$prefix_dir" || ! -d "$prefix_dir" ]]; then
+  echo "pyenv-uv: could not resolve target '$target' to a valid prefix dir." >&2
+  exit 3
+fi
+
+# Persist override first
+pyenv_uv_override_set "$alias_name" "$target"
+
+# Create/update alias link (force if requested, else safe)
+if [[ $force -eq 1 ]]; then
+  pyenv_uv_link "$alias_name" "$prefix_dir" "force" || true
+else
+  # safe will still overwrite existing uv-managed alias; won't overwrite non-uv alias
+  pyenv_uv_link "$alias_name" "$prefix_dir" "safe" || true
+fi
+
+pyenv-rehash
+echo "pyenv-uv: set override '$alias_name' -> '$target' (prefix $prefix_dir)"

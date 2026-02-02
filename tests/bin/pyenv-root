@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+echo "${TEST_PYENV_ROOT:?TEST_PYENV_ROOT not set}"

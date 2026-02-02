@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# minimal stub used by plugin commands when they print usage
+exit 0

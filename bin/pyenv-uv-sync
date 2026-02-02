@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+#
+# Usage:
+#   pyenv uv-sync
+#
+# Contract:
+# - Source of truth is uv's installed toolchains (uv python dir).
+# - Ensure pyenv main registrations exist:
+#     ${PYENV_UV_PREFIX:-uv-}<uv-toolchain-basename>
+# - Create/update patch aliases:
+#     X.Y.Z -> chosen toolchain prefix
+#
+
+set -euo pipefail
+
+[ -n "${PYENV_DEBUG:-}" ] && set -x
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "pyenv-uv: this command must be run with bash (not sh)." >&2
+  exit 127
+fi
+
+no_aliases=0
+case "${PYENV_UV_ALIASES:-1}" in
+  0|false|FALSE|no|NO) no_aliases=1 ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-refresh-aliases|--no-aliases) no_aliases=1; shift ;;
+    --help|-h)
+      echo "Usage: pyenv uv-sync [--no-refresh-aliases]" >&2
+      exit 0
+      ;;
+    --) shift; break ;;
+    -*) echo "pyenv-uv: unknown option: $1" >&2; exit 1 ;;
+    *) break ;;
+  esac
+done
+
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../libexec/pyenv-uv-common.bash
+source "${PLUGIN_ROOT}/libexec/pyenv-uv-common.bash"
+
+pyenv_uv_require uv pyenv-root pyenv-rehash
+
+uv_dir="$(uv python dir)"
+uv_prefix="$(pyenv_uv_prefix)"
+
+[[ -d "$uv_dir" ]] || { pyenv-rehash; exit 0; }
+
+find "$uv_dir" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sort | while IFS= read -r d; do
+  base="$(basename "$d")"
+  pyenv_uv_link "${uv_prefix}${base}" "$d" "safe" || true
+done
+
+if [[ $no_aliases -eq 1 ]]; then
+  pyenv_uv_clear_aliases
+  pyenv-rehash
+else
+  pyenv_uv_refresh_aliases
+fi

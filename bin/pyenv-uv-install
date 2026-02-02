@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+#
+# Usage:
+#   pyenv uv-install [--default] [--force] <request> [<extra-pyenv-name>]
+#
+# Contract:
+# - Install via uv.
+# - Always register main name:
+#     ${PYENV_UV_PREFIX:-uv-}<uv-toolchain-basename> -> prefix
+# - Optionally register <extra-pyenv-name> -> prefix
+# - Then refresh patch aliases from already-linked uv-* entries in pyenv
+#
+
+set -euo pipefail
+
+[ -n "${PYENV_DEBUG:-}" ] && set -x
+
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "pyenv-uv: this command must be run with bash (not sh)." >&2
+  exit 127
+fi
+
+default=0
+force=0
+
+no_aliases=0
+case "${PYENV_UV_ALIASES:-1}" in
+  0|false|FALSE|no|NO) no_aliases=1 ;;
+esac
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --default) default=1; shift ;;
+    --force) force=1; shift ;;
+    --no-refresh-aliases) no_aliases=1; shift ;;
+    --help|-h)
+      echo "Usage: pyenv uv-install [--default] [--force] [--no-refresh-aliases] <request> [<extra-pyenv-name>]" >&2
+      exit 0
+      ;;
+    --) shift; break ;;
+    -*) echo "pyenv-uv: unknown option: $1" >&2; exit 1 ;;
+    *) break ;;
+  esac
+done
+
+req="${1:-}"
+extra_name="${2:-}"
+if [[ -z "$req" ]]; then
+  echo "Usage: pyenv uv-install [--default] [--force] <request> [<extra-pyenv-name>]" >&2
+  exit 1
+fi
+
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../libexec/pyenv-uv-common.bash
+source "${PLUGIN_ROOT}/libexec/pyenv-uv-common.bash"
+
+pyenv_uv_require uv pyenv-root pyenv-rehash
+
+UV_PREFIX="${PYENV_UV_PREFIX:-uv-}"
+
+install_args=(python install)
+[[ $default -eq 1 ]] && install_args+=(--default)
+install_args+=("$req")
+uv "${install_args[@]}"
+
+pyexe="$(uv python find --managed-python --no-project "$req" 2>/dev/null || true)"
+if [[ -z "$pyexe" || ! -x "$pyexe" ]]; then
+  echo "pyenv-uv: could not locate installed python for request: $req" >&2
+  exit 3
+fi
+
+bindir="$(cd "$(dirname "$pyexe")" && pwd)"
+prefix_dir="$(cd "${bindir}/.." && pwd)"
+base="$(basename "$prefix_dir")"
+main_name="${UV_PREFIX}${base}"
+
+if [[ $force -eq 1 ]]; then
+  pyenv_uv_link "$main_name" "$prefix_dir" "force" || true
+else
+  pyenv_uv_link "$main_name" "$prefix_dir" "safe" || true
+fi
+
+if [[ -n "$extra_name" ]]; then
+  if [[ $force -eq 1 ]]; then
+    pyenv_uv_link "$extra_name" "$prefix_dir" "force" || true
+  else
+    if ! pyenv_uv_link "$extra_name" "$prefix_dir" "safe"; then
+      echo "pyenv-uv: pyenv version '${extra_name}' already exists and is not safe to overwrite." >&2
+      echo "          Use --force to overwrite it." >&2
+      exit 2
+    fi
+  fi
+fi
+
+if [[ $no_aliases -eq 1 ]]; then
+  pyenv-rehash
+else
+  pyenv_uv_refresh_aliases
+fi
+
+ver="$("$pyexe" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))' 2>/dev/null || true)"
+echo "pyenv-uv: installed '$req' (actual ${ver:-unknown}) main='$main_name'"
