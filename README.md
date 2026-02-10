@@ -1,5 +1,8 @@
 
-# Pyenv plugin: pyenv-uv
+**.. For reference only. Do not use. See https://github.com/newbery/uv-python-shims for a simpler solution ..**
+
+
+# Pyenv plugin: pyenv-uv (archived)
 
 A [pyenv](https://github.com/pyenv/pyenv) plugin to support managing python
 installs using [uv](https://docs.astral.sh/uv/reference/cli/#uv-python).
